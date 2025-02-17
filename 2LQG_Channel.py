@@ -1,3 +1,4 @@
+# python3 (initial U mean guess)
 import sys
 import numpy as np
 import dedalus.public as d3
@@ -13,20 +14,20 @@ Nx = 512
 Ny = 256
 
 dealias = 3/2
-stop_sim_time = 5000
+stop_sim_time = 50000
 timestepper = d3.RK443
 dtype = np.float64
 
 #Physical Parameters
 delx = Lx/Nx
-# fine-scale dissipation coefficient
-nu_2 = (delx)**2*4
-res_cons = 0.2
-# Ekman Damping coefficent
-nu0 = float(sys.argv[1])/10
-#beta 
-beta = float(sys.argv[2])/10
-# nu0 = 0.2
+nu2 = (delx)**2*4
+T = 0.2
+lambda_scale = Lx / 50 / (2 * np.pi)
+Delu = float(sys.argv[1])/100
+r = 0.16 * (Delu / lambda_scale)
+beta = 0.05
+k_d = 1
+
 
 # Bases
 coords = d3.CartesianCoordinates('x', 'y')
@@ -38,8 +39,8 @@ ybasis = d3.Chebyshev(coords['y'], size=Ny, bounds=(-Ly/2, Ly/2), dealias=dealia
 #################
 q1 = dist.Field(name='q1', bases=(xbasis,ybasis) )
 q2 = dist.Field(name='q2', bases=(xbasis,ybasis) )
-q1_Mean = dist.Field(name='q1_Mean', bases=ybasis )
-q2_Mean = dist.Field(name='q2_Mean', bases=ybasis )
+Q1M = dist.Field(name='Q1M', bases=ybasis )
+Q2M = dist.Field(name='Q2M', bases=ybasis )
 
 tau_q1_b = dist.Field(name='tau_q1_b', bases=xbasis)
 tau_q1_t = dist.Field(name='tau_q1_t', bases=xbasis)
@@ -70,8 +71,10 @@ dx = lambda A: d3.Differentiate(A, coords['x'])
 dy = lambda A: d3.Differentiate(A, coords['y'])
 lap = lambda A: d3.Laplacian(A)
 xinteg = lambda A: d3.Integrate(A, ('x'))
+yinteg = lambda A: d3.Integrate(A, ('y'))
 integ = lambda A: d3.Integrate(A, ('x', 'y'))
 xavg = lambda A: d3.Average(A, ('x'))
+yavg = lambda A: d3.Average(A, ('y'))
 avg = lambda A: d3.Average(A, ('x', 'y'))
 
 x, y = dist.local_grids(xbasis, ybasis)
@@ -79,23 +82,28 @@ x, y = dist.local_grids(xbasis, ybasis)
 J = lambda A, B: dx(A)*dy(B)-dy(A)*dx(B)
 
 ###
-u_1 = -dy(Psi_1)
-v_1 =  dx(Psi_1)
-u_2 = -dy(Psi_2)
-v_2 =  dx(Psi_2)
-T = Psi_1-Psi_2
-h2 = Psi_2-Psi_1
+u1 = -dy(Psi_1)
+U1 = xavg(u1)
+u1_prime = u1-U1
+v1 =  dx(Psi_1)
+V1 = xavg(v1)
+v1_prime = v1-V1
+u2 = -dy(Psi_2)
+U2 = xavg(u2)
+u2_prime = u2-U2
+v2 =  dx(Psi_2)
+V2 = xavg(v2)
+v2_prime = v2-V2
+Psi = Psi_1-Psi_2
 
-zeta_1 = -dy(u_1)+dx(v_1)
-zeta_2 = -dy(u_2)+dx(v_2)
 
-KE1 = avg(u_1**2+v_1**2)*0.5
-KE2 = avg(u_2**2+v_2**2)*0.5
-APE = avg(T**2)*0.5
+zeta_1 = -dy(u1)+dx(v1)
+zeta_2 = -dy(u2)+dx(v2)
 
-u_1_mean = avg(u_1)
-u_2_mean = avg(u_2)
-Heat_Flux = avg((v_1+v_2)/2*(Psi_1-Psi_2))
+KE1 = integ(u1**2+v1**2)*0.5
+KE2 = integ(u2**2+v2**2)*0.5
+APE = integ((Psi**2)*k_d**2/4)
+Relaxation_E = 0
 
 # Problem
 problem = d3.IVP([q1, q2, \
@@ -106,19 +114,19 @@ problem = d3.IVP([q1, q2, \
                     ], namespace=locals())
 
 #################
-problem.add_equation("dt(q1) - nu_2*lap(q1) +lift(tau_q1_b,-1)+lift(tau_q1_t,-2) = -res_cons*(xavg(q1)-q1_Mean) - (u_1*dx(q1)+v_1*dy(q1)) - beta*v_1")
-problem.add_equation("dt(q2) - nu_2*lap(q2) +lift(tau_q2_b,-1)+lift(tau_q2_t,-2) + nu0*lap(Psi_2) = -res_cons*(xavg(q2)-q2_Mean) - (u_2*dx(q2)+v_2*dy(q2))- beta*v_2")
+problem.add_equation("dt(q1) - nu2*lap(q1) +lift(tau_q1_b,-1)+lift(tau_q1_t,-2) = -T*(xavg(q1)-Q1M) - (u1*dx(q1)+v1*dy(q1)) - beta * v1")
+problem.add_equation("dt(q2) - nu2*lap(q2) +lift(tau_q2_b,-1)+lift(tau_q2_t,-2) + r*lap(Psi_2) = -T*(xavg(q2)-Q2M) - (u2*dx(q2)+v2*dy(q2)) - beta * v2")
 problem.add_equation("dy(q1)(y=-Ly/2)=0")
 problem.add_equation("dy(q1)(y= Ly/2)=0")
 problem.add_equation("dy(q2)(y=-Ly/2)=0")
 problem.add_equation("dy(q2)(y= Ly/2)=0")
 
 #################
-problem.add_equation("lap(Psi_1)+(Psi_2-Psi_1)+lift(tau_Psi_1_b,-1)+lift(tau_Psi_1_t,-2)+tau_Psi_1=q1")
+problem.add_equation("lap(Psi_1)- k_d**2 / 2 * (Psi_1-Psi_2)+lift(tau_Psi_1_b,-1)+lift(tau_Psi_1_t,-2)+tau_Psi_1=q1")
 problem.add_equation("Psi_1(y= Ly/2)-tau_Psi_1bc_t=0");  problem.add_equation("Psi_1(y=-Ly/2)-tau_Psi_1bc_b=0")
 problem.add_equation("xinteg(dy(Psi_1)(y=Ly/2)) = 0"); problem.add_equation("xinteg(dy(Psi_1)(y=-Ly/2)) = 0"); 
 
-problem.add_equation("lap(Psi_2)+(Psi_1-Psi_2)+lift(tau_Psi_2_b,-1)+lift(tau_Psi_2_t,-2)+tau_Psi_2=q2")
+problem.add_equation("lap(Psi_2)+ k_d**2 / 2 * (Psi_1-Psi_2)+lift(tau_Psi_2_b,-1)+lift(tau_Psi_2_t,-2)+tau_Psi_2=q2")
 problem.add_equation("Psi_2(y= Ly/2)-tau_Psi_2bc_t=0"); problem.add_equation("Psi_2(y=-Ly/2)-tau_Psi_2bc_b=0")
 problem.add_equation("xinteg(dy(Psi_2)(y=Ly/2)) = 0");  problem.add_equation("xinteg(dy(Psi_2)(y=-Ly/2)) = 0")
 
@@ -130,49 +138,78 @@ solver = problem.build_solver(timestepper)
 solver.stop_sim_time = stop_sim_time
 
 # Initial conditions
-q1_Mean['g'] = 10*np.tanh(y/5)+4*np.cosh(y/5)**(-2)*np.tanh(y/5)/5
-q2_Mean['g'] = -10*np.tanh(y/5)
+Q1M['g'] = (10*np.tanh(y/5)+4*np.cosh(y/5)**(-2)*np.tanh(y/5)/5)/5
+Q2M['g'] = (-10*np.tanh(y/5))/5
 
 q1['g'] = 0; q2['g'] = 0
 q1.fill_random('c', seed=100, distribution='normal', scale=1e-3) # Random noise
 q1.low_pass_filter(shape=(10, 10)); q1.high_pass_filter(shape=(5, 5))
 
-q1['g'] += q1_Mean['g']; q2['g'] += q2_Mean['g']
+q1['g'] += Q1M['g']; q2['g'] += Q2M['g']
 
+q1_bar = xavg(q1)  # Zonal mean of q1
+q1_prime = q1 - q1_bar
+q2_bar = xavg(q2)  # Zonal mean of q2
+q2_prime = q2 - q2_bar
+
+Psi_1_bar = xavg(Psi_1)
+Psi_1_prime = Psi_1 - Psi_1_bar
+Psi_2_bar = xavg(Psi_2)
+Psi_2_prime = Psi_2 - Psi_2_bar
+
+HF1 = -dy(xavg(v1_prime * q1_prime))
+HF2 = -dy(xavg(v2_prime * q2_prime))
+          
+ZKE1 = yinteg(U1**2+V1**2)*0.5
+ZKE2 = yinteg(U2**2+V2**2)*0.5
+ZAPE = yinteg(((Psi_1_bar-Psi_2_bar)**2)*k_d**2/4)
+EKE1 = integ(u1_prime**2+v1_prime**2)*0.5
+EKE2 = integ(u2_prime**2+v2_prime**2)*0.5
+EAPE = integ(((Psi_1_prime-Psi_2_prime)**2)*k_d**2/4)
+
+H = xavg(Psi)
+h = Psi - H
+EHF = (v1_prime + v2_prime) * h
+EFH = avg(EHF)
+
+b = dy(Psi)
+TG = avg(b)
 # Analysis
-snapname = '2LayQG_channel_sp_%.1f_%d' %(nu0,Nx)
-snapname = snapname.replace(".", "d" ); 
-snapdata = solver.evaluator.add_file_handler(snapname, sim_dt=1, max_writes=10)
+snapname = '2LayQG_channel_snap_' + 'U' + sys.argv[1]
+snapdata = solver.evaluator.add_file_handler(snapname, sim_dt=1, max_writes=100)
 snapdata.add_task(-(-q1), name='q1')
 snapdata.add_task(-(-q2), name='q2')
-snapdata.add_task(-(-Psi_1), name='Psi_1')
-snapdata.add_task(-(-Psi_2), name='Psi_2')
-snapdata.add_task(-(-T), name='T')
 snapdata.add_task(-(-zeta_1), name='zeta_1')
 snapdata.add_task(-(-zeta_2), name='zeta_2')
 
 
-diagname = '2LayQG_channel_dg_%.1f_%d' %(nu0,Nx)
-diagname = diagname.replace(".", "d" ); 
+
+diagname = '2LayQG_channel_diag_' + 'U' + sys.argv[1]
 diagdata = solver.evaluator.add_file_handler(diagname, sim_dt=0.1, max_writes=stop_sim_time*100)
 diagdata.add_task(KE1, name='KE1')
 diagdata.add_task(KE2, name='KE2')
 diagdata.add_task(APE, name='APE')
-diagdata.add_task(u_1_mean, name='u_1_mean')
-diagdata.add_task(u_2_mean, name='u_2_mean')
-diagdata.add_task(Heat_Flux, name='Heat_Flux')
+diagdata.add_task(ZKE1, name='ZKE1')
+diagdata.add_task(ZKE2, name='ZKE2')
+diagdata.add_task(EKE1, name='EKE1')
+diagdata.add_task(EKE2, name='EKE2')
+diagdata.add_task(ZAPE, name='ZAPE')
+diagdata.add_task(EAPE, name='EAPE')
+diagdata.add_task(EFH, name='EFH')
+diagdata.add_task(TG, name='TG')
+
 
 # Flow properties
 dt_change_freq = 10
 flow_cfl = d3.GlobalFlowProperty(solver, cadence=dt_change_freq)
-flow_cfl.add_property(abs(u_1), name='absu_1')
-flow_cfl.add_property(abs(v_1), name='absv_1')
-flow_cfl.add_property(abs(u_2), name='absu_2')
-flow_cfl.add_property(abs(v_2), name='absv_2')
+flow_cfl.add_property(abs(u1), name='absu1')
+flow_cfl.add_property(abs(v1), name='absv1')
+flow_cfl.add_property(abs(u2), name='absu2')
+flow_cfl.add_property(abs(v2), name='absv2')
 
 print_freq = 50
 flow = d3.GlobalFlowProperty(solver, cadence=print_freq)
-flow.add_property( (u_1**2+v_1**2)*0.5 , name='KE1')
+flow.add_property( (u1**2+v1**2)*0.5 , name='KE1')
 
 ###
 # Main loop
@@ -184,7 +221,7 @@ try:
         solver.step(timestep)
 
         if (solver.iteration) % dt_change_freq == 0:
-            maxU = max(1e-10,flow_cfl.max('absu_1'),flow_cfl.max('absu_2')); maxV = max(1e-10,flow_cfl.max('absv_1'),flow_cfl.max('absv_2'))
+            maxU = max(1e-10,flow_cfl.max('absu1'),flow_cfl.max('absu2')); maxV = max(1e-10,flow_cfl.max('absv1'),flow_cfl.max('absv2'))
             timestep_CFL = min(delx/maxU,dely/maxV)*0.2
             timestep = min(max(1e-10, timestep_CFL), 0.1)
 
